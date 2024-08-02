@@ -1,0 +1,18 @@
+<urlset xmlns = 'http://www.sitemaps.org/schemas/sitemap/0.9'>
+<url><loc>/404.html</loc></url>
+<url><loc>/LICENSE-text.html</loc></url>
+<url><loc>/LICENSE.html</loc></url>
+<url><loc>/authors.html</loc></url>
+<url><loc>/index.html</loc></url>
+<url><loc>/reference/density_sample.html</loc></url>
+<url><loc>/reference/evaluate_sdm.html</loc></url>
+<url><loc>/reference/index.html</loc></url>
+<url><loc>/reference/pipe.html</loc></url>
+<url><loc>/reference/png_from_preds.html</loc></url>
+<url><loc>/reference/predict_sdm.html</loc></url>
+<url><loc>/reference/prep_sdm.html</loc></url>
+<url><loc>/reference/run_full_sdm.html</loc></url>
+<url><loc>/reference/sdm_metrics.html</loc></url>
+<url><loc>/reference/tune_sdm.html</loc></url>
+</urlset>
+
