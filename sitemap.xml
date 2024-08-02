@@ -1,18 +1,18 @@
 <urlset xmlns = 'http://www.sitemaps.org/schemas/sitemap/0.9'>
-<url><loc>/404.html</loc></url>
-<url><loc>/LICENSE-text.html</loc></url>
-<url><loc>/LICENSE.html</loc></url>
-<url><loc>/authors.html</loc></url>
-<url><loc>/index.html</loc></url>
-<url><loc>/reference/density_sample.html</loc></url>
-<url><loc>/reference/evaluate_sdm.html</loc></url>
-<url><loc>/reference/index.html</loc></url>
-<url><loc>/reference/pipe.html</loc></url>
-<url><loc>/reference/png_from_preds.html</loc></url>
-<url><loc>/reference/predict_sdm.html</loc></url>
-<url><loc>/reference/prep_sdm.html</loc></url>
-<url><loc>/reference/run_full_sdm.html</loc></url>
-<url><loc>/reference/sdm_metrics.html</loc></url>
-<url><loc>/reference/tune_sdm.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/404.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/LICENSE-text.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/LICENSE.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/authors.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/index.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/reference/density_sample.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/reference/evaluate_sdm.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/reference/index.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/reference/pipe.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/reference/png_from_preds.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/reference/predict_sdm.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/reference/prep_sdm.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/reference/run_full_sdm.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/reference/sdm_metrics.html</loc></url>
+<url><loc>https://acanthiza.github.io/envSDM/reference/tune_sdm.html</loc></url>
 </urlset>
 
