@@ -41,9 +41,9 @@
     <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">run_full_sdm</span><span class="op">(</span></span>
 <span>  this_taxa <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  <span class="va">out_dir</span>,</span>
-<span>  tune_args <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  use_metric <span class="op">=</span> <span class="st">"combo"</span>,</span>
 <span>  force_new <span class="op">=</span> <span class="cn">FALSE</span>,</span>
-<span>  save_to <span class="op">=</span> <span class="fu">fs</span><span class="fu">::</span><span class="fu"><a href="https://fs.r-lib.org/reference/path.html" class="external-link">path</a></span><span class="op">(</span><span class="va">out_dir</span>, <span class="st">"best"</span><span class="op">)</span>,</span>
+<span>  save_to <span class="op">=</span> <span class="fu">fs</span><span class="fu">::</span><span class="fu"><a href="https://fs.r-lib.org/reference/path.html" class="external-link">path</a></span><span class="op">(</span><span class="va">out_dir</span>, <span class="va">use_metric</span><span class="op">)</span>,</span>
 <span>  do_gc <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  <span class="va">...</span></span>
 <span><span class="op">)</span></span></code></pre></div>
@@ -63,10 +63,11 @@ this will be `basename(dirname(out_dir))`.</p></dd>
 into which results will be saved.</p></dd>
 
 
-<dt id="arg-tune-args">tune_args<a class="anchor" aria-label="anchor" href="#arg-tune-args"></a></dt>
-<dd><p>List with element `algo` and elements: `fc`, `rm`, `trees`,
-`mtry` and `nodesize` as appropriate to the `algo.` If supplied as `NULL` an
-attempt will be made to load 'best' tune from `evaluation.csv` in `out_dir`</p></dd>
+<dt id="arg-use-metric">use_metric<a class="anchor" aria-label="anchor" href="#arg-use-metric"></a></dt>
+<dd><p>Character. Which metric to use to find the 'best' tune
+arguments from previous tuning results? Default is `combo`, the product of
+`auc_po`, `CBI_rescale` and `IMAE`. `use_metric` must be `combo` or have been
+ used in the use_metrics argument to `tune_sdm()`.</p></dd>
 
 
 <dt id="arg-force-new">force_new<a class="anchor" aria-label="anchor" href="#arg-force-new"></a></dt>
@@ -75,7 +76,7 @@ attempt will be made to load 'best' tune from `evaluation.csv` in `out_dir`</p><
 
 <dt id="arg-save-to">save_to<a class="anchor" aria-label="anchor" href="#arg-save-to"></a></dt>
 <dd><p>Character. Name of path to save results. Defaults to
-`fs::path(out_dir, "best")`</p></dd>
+`fs::path(out_dir, use_metric)`</p></dd>
 
 
 <dt id="arg-do-gc">do_gc<a class="anchor" aria-label="anchor" href="#arg-do-gc"></a></dt>
