@@ -293,11 +293,11 @@ parallel.</p></dd>
 <span class="r-in"><span>  <span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="va">prep_ex</span><span class="op">$</span><span class="va">blocks</span><span class="op">)</span></span></span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   pa bio1 bio5 bio6 bio7 bio8 bio9 bio12 bio16 bio17      x      y  cell block</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> 1  1  263  338  191  147  261  263  1639   724    62 -65.25 -10.25 18720     3</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 2  1  253  329  150  179  271  253  3624  1547   373 -65.25 -16.75 21138     4</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 3  1  243  318  150  168  264  243  1693   775   186 -63.75 -17.25 21327     5</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 4  1  252  326  154  172  270  252  2501  1081   280 -64.25 -16.25 20954     5</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 5  1  240  317  150  168  261  240  1214   516   146 -63.25 -17.75 21514     5</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 6  1  275  335  231  104  270  275  2259   956   208 -56.75  -2.75 15947     3</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 2  1  253  329  150  179  271  253  3624  1547   373 -65.25 -16.75 21138     3</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 3  1  243  318  150  168  264  243  1693   775   186 -63.75 -17.25 21327     1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 4  1  252  326  154  172  270  252  2501  1081   280 -64.25 -16.25 20954     1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 5  1  240  317  150  168  261  240  1214   516   146 -63.25 -17.75 21514     1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 6  1  275  335  231  104  270  275  2259   956   208 -56.75  -2.75 15947     4</span>
 <span class="r-in"><span></span></span>
 <span class="r-in"><span>  <span class="va">blocks</span> <span class="op">&lt;-</span> <span class="va">prep_ex</span><span class="op">$</span><span class="va">blocks</span> <span class="op"><a href="pipe.html">%&gt;%</a></span></span></span>
 <span class="r-in"><span>    <span class="fu">dplyr</span><span class="fu">::</span><span class="fu"><a href="https://dplyr.tidyverse.org/reference/mutate.html" class="external-link">mutate</a></span><span class="op">(</span>blocks <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/factor.html" class="external-link">factor</a></span><span class="op">(</span><span class="va">block</span><span class="op">)</span><span class="op">)</span> <span class="op"><a href="pipe.html">%&gt;%</a></span> <span class="co"># for map</span></span></span>
