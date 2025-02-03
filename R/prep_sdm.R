@@ -9,6 +9,7 @@
 #' Options for managing memory are `terra_options`, `max_cells_in_memory` and
 #' `do_gc`.
 #'
+#'
 #' @param this_taxa Character. Name of taxa. Only used to print some messages.
 #' Ignored if NULL
 #' @param out_dir FALSE or character. If FALSE the result of prep_sdm will be
@@ -55,13 +56,18 @@
 #' @param spatial_folds Logical. Use spatial folds? Even if `TRUE`, can resort
 #' to non-spatial cv if presences per fold do not meet `min_fold_n` or there are
 #' not enough presences to support more than one fold.
-#' @param min_fold_n Numeric. Sets both minimum number of presences, and,
-#' by default, the minimum number of presences required for a model.
+#' @param hold_prop Numeric. Proportion of data to keep back for
+#' validating the final model.
+#' @param min_fold_n Numeric. Sets the minimum number of presences, and
+#' min_fold_n * max_hold_prop sets the minimum number of presences required
+#' for a model.
 #' @param stretch_value Numeric. Stretch the density raster to this value.
 #' @param dens_res `NULL` or numeric. Resolution (in metres) of density raster.
 #' Set to `NULL` to use the same resolution as the predictors.
-#' @param save_pngs Logical. Save out a .png of the density raster and spatial
-#' blocks
+#' @param block_iterations Numeric. Number of attempts to achieve `min_fold_n`
+#' presences in each of `folds` folds before lowering `folds` by one and trying
+#' again. If attempts fail down to folds == 2, non-spatial cross validation is
+#' used.
 #' @param reduce_env_thresh Numeric. Threshold used to flag highly correlated
 #' and low importance variables. Set to 0 to skip this step. If > 0, highly
 #' correlated and low importance variables will be removed. In the case of
@@ -129,10 +135,11 @@
                        , many_p_prop = 2
                        , folds = 5
                        , spatial_folds = TRUE
+                       , hold_prop = 0.2
                        , min_fold_n = 8
                        , stretch_value = 10
                        , dens_res = 1000
-                       , save_pngs = FALSE
+                       , block_iterations = 30
                        , reduce_env_thresh = 0.9
                        , do_gc = FALSE
                        , force_new = FALSE
@@ -349,283 +356,346 @@
         tibble::as_tibble() %>%
         purrr::set_names(c("x", "y"))
 
-      readr::write_lines(paste0(nrow(prep$presence_ras)
+      n_p <- nrow(prep$presence_ras)
+
+      readr::write_lines(paste0(n_p
                                 , " presences in predict_boundary and on env rasters"
                                 )
                          , file = log_file
                          , append = TRUE
                          )
 
-      if(nrow(prep$presence_ras) > min_fold_n) {
+      # Adjust args ---------
+      ## folds adj -------
 
-        # subset predictors? ------
-        if(pred_limit) {
+      k_folds <- folds
 
-          start_subset <- Sys.time()
+      while(n_p < min_fold_n * k_folds) {
 
-          if(!is.null(terra_options)) {
+        k_folds <- k_folds - 1
 
-            do.call(terra::terraOptions
-                    , args = terra_options
-                    )
+      }
 
-          }
+      if(k_folds < folds) {
 
-          terra::window(prep_preds) <- terra::ext(terra::vect(prep$predict_boundary))
+        readr::write_lines(paste0("warning: too few records to support original folds ("
+                                  , folds
+                                  , "). Folds reduced to "
+                                  , k_folds
+                                  )
+                           , file = log_file
+                           , append = TRUE
+                           )
 
-          readr::write_lines(paste0("subsetting predictors done in "
-                                    , round(difftime(Sys.time(), start_subset, units = "mins"), 2)
-                                    , " minutes"
-                                    )
-                             , file = log_file
-                             , append = TRUE
-                             )
+      }
 
-        }
+      if(k_folds < 3) {
 
-        # folds adj -------
+        readr::write_lines(paste0("WARNING: there are only "
+                                  , n_p
+                                  , " presences. This is not enough to support the bare minimum"
+                                  , " of three folds (one as 'test' set and two as 'training' sets"
+                                  , " with "
+                                  , min_fold_n
+                                  , " in each fold. SDM abandoned"
+                                  )
+                           , file = log_file
+                           , append = TRUE
+                           )
 
-        # aiming for at least 'min_fold_n' presences in each fold
+        prep$abandoned <- TRUE
 
-        k_folds <- folds
+      }
 
-        while(nrow(prep$presence_ras) < min_fold_n * k_folds) {
-
-          k_folds <- k_folds - 1
-
-        }
-
-        if(k_folds == 0) k_folds <- 1
-
-        if(k_folds < folds) {
-
-          readr::write_lines(paste0("warning: too few records to support original folds ("
-                                    , folds
-                                    , "). Folds reduced to "
-                                    , k_folds
-                                    )
-                             , file = log_file
-                             , append = TRUE
-                             )
-
-        }
-
-        if(k_folds < 2) {
-
-          readr::write_lines(paste0("WARNING: folds = ", k_folds)
-                             , file = log_file
-                             , append = TRUE
-                             )
-
-          spatial_folds <- FALSE
-
-        }
-
-        k_folds_adj <- k_folds
-        # use k_folds_adj if need to revert to non-spatial cv later (see folds/non-spatial)
+      if(!prep$abandoned) {
 
         # num_bg adj------
 
         if(prop_abs == "prop") {
 
-          num_bg <- num_bg * nrow(prep$presence_ras)
+          num_bg <- num_bg * n_p
 
         }
 
-        if(num_bg < many_p_prop * nrow(prep$presence_ras)) num_bg <- many_p_prop * nrow(prep$presence_ras)
+        if(num_bg < many_p_prop * n_p) num_bg <- many_p_prop * n_p
 
-        # density raster ------
+        if(n_p > min_fold_n) {
 
-        density_file <- fs::path(out_dir
-                                 , "density.tif"
+          # subset predictors? ------
+          if(pred_limit) {
+
+            start_subset <- Sys.time()
+
+            if(!is.null(terra_options)) {
+
+              do.call(terra::terraOptions
+                      , args = terra_options
+                      )
+
+            }
+
+            terra::window(prep_preds) <- terra::ext(terra::vect(prep$predict_boundary))
+
+            readr::write_lines(paste0("subsetting predictors done in "
+                                      , round(difftime(Sys.time(), start_subset, units = "mins"), 2)
+                                      , " minutes"
+                                      )
+                               , file = log_file
+                               , append = TRUE
+                               )
+
+          }
+
+          # density raster ------
+
+          density_file <- fs::path(out_dir
+                                   , "density.tif"
+                                   )
+
+          run <- if(file.exists(density_file)) force_new else TRUE
+
+          if(run) {
+
+            start_dens_ras <- Sys.time()
+
+            if(all(!is.null(dens_res), !terra::is.lonlat(prep_preds[[1]]))) {
+
+              # resolution of density raster < pred raster
+
+              use_res <- if(terra::res(prep_preds)[[1]] < dens_res) dens_res else terra::res(prep_preds)[[1]]
+
+              temp_ras <- terra::rast(resolution = use_res
+                                      , crs = terra::crs(prep_preds[[1]])
+                                      , extent = terra::ext(prep$predict_boundary)
+                                      , vals = 1
+                                      )
+
+              bw <- MASS::kde2d(as.matrix(prep$presence_ras[,1])
+                                , as.matrix(prep$presence_ras[,2])
+                                , n = c(nrow(temp_ras), ncol(temp_ras))
+                                , lims = terra::ext(temp_ras) %>% as.vector()
+                                )
+
+              target_density <- raster::raster(bw) %>%
+                terra::rast() %>%
+                terra::resample(temp_ras) %>%
+                terra::focal(3
+                             , mean
+                             , na.policy = "only"
+                             , na.rm = TRUE
+                             )
+
+            } else {
+
+              # density raster = predict raster
+              # STU METHOD
+              # weighted bandwidth
+              ## same method as spatialEco::sf.kde
+
+              temp_ras <- terra::rast(resolution = terra::res(prep_preds)
+                                      , crs = terra::crs(prep_preds[[1]])
+                                      , extent = terra::ext(prep$predict_boundary)
+                                      , vals = 1
+                                      )
+
+              pres_ras <- terra::rasterize(prep$presence_ras %>%
+                                             sf::st_as_sf(coords = c("x", "y")
+                                                          , crs = sf::st_crs(prep_preds[[1]])
+                                                          )
+                                           , y = temp_ras
+                                           , fun = length
+                                           , touches = TRUE
+                                           )
+
+              pres <- terra::as.data.frame(pres_ras, xy = TRUE) %>%
+                tibble::as_tibble()
+
+              colnames(pres)[3] <- "COUNT"
+
+              pres <- pres %>%
+                dplyr::mutate(scaled = COUNT * (length(COUNT) / sum(COUNT)))
+
+              if(all(pres$scaled == 1)) pres$scaled <- sample(c(0.999, 1.001), length(pres$scaled), replace = TRUE) # nw
+
+              bw <- ks::Hpi.diag(x = as.matrix(pres[, c("x", "y", "scaled")])
+                                 , pilot = "dscalar"
                                  )
 
-        run <- if(file.exists(density_file)) force_new else TRUE
+              target_density <- terra::setValues(pres_ras
+                                                 , matrix(ks::kde(as.matrix(pres[, c("x", "y")])
+                                                                  , eval.points = terra::xyFromCell(pres_ras, 1:terra::ncell(pres_ras))
+                                                                  , gridsize = c(nrow(pres_ras), ncol(pres_ras))
+                                                                  # use bw or NULL if error
+                                                                  ## NULL will use default method - maybe unweighted?
+                                                                  , h = ifelse(inherits(bw, "error"), NULL, bw)
+                                                                  , w = pres[["scaled"]]
+                                                                  , density = TRUE
+                                                                  )$estimate
+                                                          , nrow = nrow(pres_ras)
+                                                          , ncol = ncol(pres_ras)
+                                                          , byrow = TRUE
+                                                          )
+                                                 ) %>%
+                terra::focal(3
+                             , mean
+                             , na.policy = "only"
+                             , na.rm = TRUE
+                             )
 
-        if(run) {
+            }
 
-          start_dens_ras <- Sys.time()
+            if(pred_limit) {
 
-          if(all(!is.null(dens_res), !terra::is.lonlat(prep_preds[[1]]))) {
+              target_density <- target_density %>%
+                terra::mask(terra::vect(prep$predict_boundary)
+                              , touches = TRUE
+                            )
 
-            # resolution of density raster < pred raster
+            }
 
-            use_res <- if(terra::res(prep_preds)[[1]] < dens_res) dens_res else terra::res(prep_preds)[[1]]
+            ## stretch-------
+            target_density <- target_density %>%
+              terra::stretch(1, stretch_value) %>%
+              terra::subst(NA,0)
 
-            temp_ras <- terra::rast(resolution = use_res
-                                    , crs = terra::crs(prep_preds[[1]])
-                                    , extent = terra::ext(prep$predict_boundary)
-                                    , vals = 1
-                                    )
+            if(FALSE) {
 
-            bw <- MASS::kde2d(as.matrix(prep$presence_ras[,1])
-                              , as.matrix(prep$presence_ras[,2])
-                              , n = c(nrow(temp_ras), ncol(temp_ras))
-                              , lims = terra::ext(temp_ras) %>% as.vector()
-                              )
+              terra::plot(prep_preds[[1]])
+              terra::plot(target_density, add = TRUE)
 
-            target_density <- raster::raster(bw) %>%
-              terra::rast() %>%
-              terra::resample(temp_ras) %>%
-              terra::focal(3
-                           , mean
-                           , na.policy = "only"
-                           , na.rm = TRUE
-                           )
+              ps <- prep$presence_ras %>%
+                tibble::as_tibble() %>%
+                sf::st_as_sf(coords = c("x", "y"), crs = sf::st_crs(prep_preds)) %>%
+                terra::vect()
+
+              terra::plot(ps, add = TRUE)
+
+              terra::plot(prep$predict_boundary %>% terra::vect()
+                          , add = TRUE
+                          )
+
+            }
+
+            terra::writeRaster(target_density
+                               , density_file
+                               , overwrite = TRUE
+                               )
+
+            readr::write_lines(paste0("density raster done in "
+                                      , round(difftime(Sys.time(), start_dens_ras, units = "mins"), 2)
+                                      , " minutes"
+                                      )
+                               , file = log_file
+                               , append = TRUE
+                               )
+
+          }
+
+
+          # background points -------
+          run <- if(exists("bg_points", where = prep)) force_new else TRUE
+
+          if(run) {
+
+            start_bg <- Sys.time()
+
+            if(!exists("target_density")) target_density <- terra::rast(density_file)
+
+            ptscell <- sample(1:terra::ncell(target_density)
+                             , num_bg * 2 # over generate here as terra::window only crops - it does not mask
+                             , prob = target_density[]
+                             , replace = TRUE
+                             )
+
+            centres <- terra::xyFromCell(target_density, ptscell)
+
+            hs <- terra::res(target_density) / 2
+
+            prep$bg_points <- cbind(runif(nrow(centres), centres[, 1] - hs[1], centres[, 1] + hs[1])
+                                    , runif(nrow(centres), centres[, 2] - hs[2], centres[, 2] + hs[2])
+                                    ) %>%
+              as.matrix() %>%
+              terra::cellFromXY(prep_preds[[1]], .) %>%
+              terra::xyFromCell(prep_preds[[1]], .) %>%
+              tibble::as_tibble() %>%
+              na.omit() %>%
+              dplyr::distinct() %>%
+              dplyr::anti_join(prep$presence_ras) %>% # background not on presences
+              sf::st_as_sf(coords = c("x", "y")
+                           , crs = sf::st_crs(target_density)
+                           ) %>%
+              # filter back to only those within predict_boundary
+              sf::st_filter(prep$predict_boundary)
+
+            if(nrow(prep$bg_points) > num_bg) {
+
+              prep$bg_points <- prep$bg_points %>%
+                dplyr::sample_n(num_bg)
+
+            }
+
+            readr::write_lines(paste0(num_bg
+                                      , " background points attempted. "
+                                      , nrow(prep$bg_points)
+                                      , " achieved in: "
+                                      , round(difftime(Sys.time(), start_bg, units = "mins"), 2)
+                                      , " minutes"
+                                      )
+                               , file = log_file
+                               , append = TRUE
+                               )
+
 
           } else {
 
-            # density raster = predict raster
-            # STU METHOD
-            # weighted bandwidth
-            ## same method as spatialEco::sf.kde
-
-            temp_ras <- terra::rast(resolution = terra::res(prep_preds)
-                                    , crs = terra::crs(prep_preds[[1]])
-                                    , extent = terra::ext(prep$predict_boundary)
-                                    , vals = 1
-                                    )
-
-            pres_ras <- terra::rasterize(prep$presence_ras %>%
-                                           sf::st_as_sf(coords = c("x", "y")
-                                                        , crs = sf::st_crs(prep_preds[[1]])
-                                                        )
-                                         , y = temp_ras
-                                         , fun = length
-                                         , touches = TRUE
-                                         )
-
-            pres <- terra::as.data.frame(pres_ras, xy = TRUE) %>%
-              tibble::as_tibble()
-
-            colnames(pres)[3] <- "COUNT"
-
-            pres <- pres %>%
-              dplyr::mutate(scaled = COUNT * (length(COUNT) / sum(COUNT)))
-
-            if(all(pres$scaled == 1)) pres$scaled <- sample(c(0.999, 1.001), length(pres$scaled), replace = TRUE) # nw
-
-            bw <- ks::Hpi.diag(x = as.matrix(pres[, c("x", "y", "scaled")])
-                               , pilot = "dscalar"
-                               )
-
-            target_density <- terra::setValues(pres_ras
-                                               , matrix(ks::kde(as.matrix(pres[, c("x", "y")])
-                                                                , eval.points = terra::xyFromCell(pres_ras, 1:terra::ncell(pres_ras))
-                                                                , gridsize = c(nrow(pres_ras), ncol(pres_ras))
-                                                                # use bw or NULL if error
-                                                                ## NULL will use default method - maybe unweighted?
-                                                                , h = ifelse(inherits(bw, "error"), NULL, bw)
-                                                                , w = pres[["scaled"]]
-                                                                , density = TRUE
-                                                                )$estimate
-                                                        , nrow = nrow(pres_ras)
-                                                        , ncol = ncol(pres_ras)
-                                                        , byrow = TRUE
-                                                        )
-                                               ) %>%
-              terra::focal(3
-                           , mean
-                           , na.policy = "only"
-                           , na.rm = TRUE
-                           )
-
-          }
-
-          if(pred_limit) {
-
-            target_density <- target_density %>%
-              terra::mask(terra::vect(prep$predict_boundary)
-                            , touches = TRUE
-                          )
-
-          }
-
-          ## stretch-------
-          target_density <- target_density %>%
-            terra::stretch(1, stretch_value) %>%
-            terra::subst(NA,0)
-
-          if(FALSE) {
-
-            terra::plot(prep_preds[[1]])
-            terra::plot(target_density, add = TRUE)
-
-            ps <- prep$presence_ras %>%
-              tibble::as_tibble() %>%
-              sf::st_as_sf(coords = c("x", "y"), crs = sf::st_crs(prep_preds)) %>%
-              terra::vect()
-
-            terra::plot(ps, add = TRUE)
-
-            terra::plot(prep$predict_boundary %>% terra::vect()
-                        , add = TRUE
-                        )
-
-          }
-
-          terra::writeRaster(target_density
-                             , density_file
-                             , overwrite = TRUE
-                             )
-
-          readr::write_lines(paste0("density raster done in "
-                                    , round(difftime(Sys.time(), start_dens_ras, units = "mins"), 2)
-                                    , " minutes"
-                                    )
-                             , file = log_file
-                             , append = TRUE
-                             )
+          target_density <- terra::rast(density_file)
 
         }
 
 
-        # background points -------
-        run <- if(exists("bg_points", where = prep)) force_new else TRUE
+        # env--------
+
+        run <- if(exists("env", prep)) force_new else TRUE
 
         if(run) {
 
-          start_bg <- Sys.time()
+          start_env <- Sys.time()
 
-          if(!exists("target_density")) target_density <- terra::rast(density_file)
+          spp_pa <- dplyr::bind_rows(prep$presence_ras %>%
+                                       tibble::as_tibble() %>%
+                                       sf::st_as_sf(coords = c("x", "y")
+                                                    , crs = sf::st_crs(prep_preds[[1]])
+                                                    ) %>%
+                                       dplyr::mutate(pa = "presence")
+                                     , prep$bg_points %>%
+                                       dplyr::mutate(pa = "absence") %>%
+                                       dplyr::select(pa)
+                                     ) %>%
+            sf::st_buffer(terra::res(prep_preds)[[1]] / 100)
 
-          ptscell <- sample(1:terra::ncell(target_density)
-                           , num_bg * 2 # over generate here as terra::window only crops - it does not mask
-                           , prob = target_density[]
-                           , replace = TRUE
-                           )
+          prep$env <- exactextractr::exact_extract(prep_preds
+                                                     , y = spp_pa
+                                                     , include_cols = "pa"
+                                                     , include_cell = TRUE
+                                                     , max_cells_in_memory = max_cells_in_memory
+                                                     ) %>%
+            dplyr::bind_rows() %>%
+            stats::na.omit() %>%
+            dplyr::select(-coverage_fraction) %>%
+            dplyr::bind_cols(terra::xyFromCell(prep_preds
+                                               , .$cell
+                                               )
+                             ) %>%
+            dplyr::mutate(pa = forcats::fct_relevel(pa, "presence"))
 
-          centres <- terra::xyFromCell(target_density, ptscell)
+          if(!is.null(cat_preds)) {
 
-          hs <- terra::res(target_density) / 2
-
-          prep$bg_points <- cbind(runif(nrow(centres), centres[, 1] - hs[1], centres[, 1] + hs[1])
-                                  , runif(nrow(centres), centres[, 2] - hs[2], centres[, 2] + hs[2])
-                                  ) %>%
-            as.matrix() %>%
-            terra::cellFromXY(prep_preds[[1]], .) %>%
-            terra::xyFromCell(prep_preds[[1]], .) %>%
-            tibble::as_tibble() %>%
-            na.omit() %>%
-            dplyr::distinct() %>%
-            dplyr::anti_join(prep$presence_ras) %>% # background not on presences
-            sf::st_as_sf(coords = c("x", "y")
-                         , crs = sf::st_crs(target_density)
-                         ) %>%
-            # filter back to only those within predict_boundary
-            sf::st_filter(prep$predict_boundary)
-
-          if(nrow(prep$bg_points) > num_bg) {
-
-            prep$bg_points <- prep$bg_points %>%
-              dplyr::sample_n(num_bg)
+            prep$env <- prep$env %>%
+              dplyr::mutate(dplyr::across(tidyselect::any_of(cat_preds), as.factor))
 
           }
 
-          readr::write_lines(paste0(num_bg
-                                    , " background points attempted. "
-                                    , nrow(prep$bg_points)
-                                    , " achieved in: "
+          readr::write_lines(paste0("env data extracted in: "
                                     , round(difftime(Sys.time(), start_bg, units = "mins"), 2)
                                     , " minutes"
                                     )
@@ -633,419 +703,200 @@
                              , append = TRUE
                              )
 
+        }
+
+        # Abandon if too few presences with env data
+        if(nrow(prep$env[prep$env$pa == "presence",]) < min_fold_n) {
+
+          readr::write_lines(paste0("warning: too few presences ("
+                                    , nrow(prep$env[prep$env$pa == 1,])
+                                    , ") with environmental variables. SDM abandoned"
+                                    )
+                             , file = log_file
+                             , append = TRUE
+                             )
+
+          prep$abandoned <- TRUE
+
+        }
+
+
+        # reduce env -------
+
+        if(all(reduce_env_thresh, !prep$abandoned)) {
+
+          run <- if(exists("reduce_env", prep)) force_new else TRUE
+
+          if(run) {
+
+            start_reduce_env <- Sys.time()
+
+            prep$reduce_env <- envModel::reduce_env(env_df = prep$env
+                                                    , env_cols = names(prep_preds)
+                                                    , y_col = "pa"
+                                                    , imp_col = "presence"
+                                                    , thresh = reduce_env_thresh
+                                                    , remove_always = c(pres_x, pres_y, "x", "y", "pa", "block", "cell")
+                                                    )
+
+            readr::write_lines(paste0("reduce_env completed in: "
+                                      , round(difftime(Sys.time(), start_reduce_env, units = "mins"), 2)
+                                      , " minutes"
+                                      )
+                               , file = log_file
+                               , append = TRUE
+                               )
+
+          }
 
         } else {
 
-        target_density <- terra::rast(density_file)
+          if(!prep$abandoned) {
 
-      }
+            prep$reduce_env$remove <- ""
+            prep$reduce_env$keep <- names(prep_preds)
+            prep$reduce_env$env_cols <- names(prep_preds)
 
-      if(save_pngs) {
-
-        # density png ------
-
-        dens_png <- fs::path(out_dir, "density.png")
-
-        if(!file.exists(dens_png)) {
-
-          png_from_tif(target_density
-                       , title = this_taxa
-                       , dots = prep$presence_ras %>%
-                         sf::st_as_sf(coords = c("x", "y")
-                                      , crs = sf::st_crs(prep_preds)
-                                      ) %>%
-                         sf::st_transform(crs = sf::st_crs(target_density))
-                       , trim = TRUE
-                       , out_png = dens_png
-                       )
+          }
 
         }
 
-      }
+          # folds------
 
+        if(!prep$abandoned) {
 
-      # env--------
+          run <- if(exists("blocks", prep)) force_new else TRUE
 
-      run <- if(exists("spp_pa_env", prep)) force_new else TRUE
+          if(run) {
 
-      if(run) {
+            start_blocks <- Sys.time()
 
-        start_env <- Sys.time()
+            ## split -------
+            prep$split_check <- list(presence_test = 0)
 
-        spp_pa <- dplyr::bind_rows(prep$presence_ras %>%
-                                     tibble::as_tibble() %>%
-                                     sf::st_as_sf(coords = c("x", "y")
-                                                  , crs = sf::st_crs(prep_preds[[1]])
-                                                  ) %>%
-                                     dplyr::mutate(pa = 1)
-                                   , prep$bg_points %>%
-                                     dplyr::mutate(pa = 0) %>%
-                                     dplyr::select(pa)
-                                   ) %>%
-          sf::st_buffer(terra::res(prep_preds)[[1]] / 100)
+            while(prep$split_check$presence_test <= 0) {
 
-        spp_pa_env <- exactextractr::exact_extract(prep_preds
-                                                   , y = spp_pa
-                                                   , include_cols = "pa"
-                                                   , include_cell = TRUE
-                                                   , max_cells_in_memory = max_cells_in_memory
-                                                   ) %>%
-          dplyr::bind_rows() %>%
-          stats::na.omit() %>%
-          dplyr::select(-coverage_fraction) %>%
-          dplyr::bind_cols(terra::xyFromCell(prep_preds
-                                             , .$cell
-                                             )
-                           )
+              prep$split <- rsample::initial_split(prep$env %>%
+                                                     dplyr::select(x, y, pa, prep$reduce_env$keep) %>%
+                                                     dplyr::mutate(pa = factor(pa))
+                                                   , strata = "pa"
+                                                   , prop = hold_prop
+                                                   )
 
-        if(!is.null(cat_preds)) {
-
-          spp_pa_env <- spp_pa_env %>%
-            dplyr::mutate(dplyr::across(tidyselect::any_of(cat_preds), as.factor))
-
-        }
-
-        readr::write_lines(paste0("env data extracted in: "
-                                  , round(difftime(Sys.time(), start_bg, units = "mins"), 2)
-                                  , " minutes"
-                                  )
-                           , file = log_file
-                           , append = TRUE
-                           )
-
-      }
-
-      # Abandon if too few presences with env data
-      if(nrow(spp_pa_env[spp_pa_env$pa == 1,]) < min_fold_n) {
-
-        readr::write_lines(paste0("warning: too few presences ("
-                                  , nrow(spp_pa_env[spp_pa_env$pa == 1,])
-                                  , ") with environmental variables. SDM abandoned"
-                                  )
-                           , file = log_file
-                           , append = TRUE
-                           )
-
-        prep$abandoned <- TRUE
-
-      }
-
-
-      # folds------
-
-      if(!prep$abandoned) {
-
-        run <- if(exists("blocks", prep)) force_new else TRUE
-
-        if(run) {
-
-          start_blocks <- Sys.time()
-
-          if(!all(spatial_folds, k_folds > 1)) {
-
-            spatial_folds <- FALSE
-
-          } else {
-
-            ## spatial ------
-
-            safe_cv_spatial <- purrr::safely(blockCV::cv_spatial)
-
-            x <- spp_pa_env %>%
-              na.omit() %>%
-              dplyr::select(x, y, pa) %>%
-              sf::st_as_sf(coords = c("x", "y")
-                           , crs = sf::st_crs(prep_preds[[1]])
-                           )
-
-            block_dist <- prep$predict_boundary %>%
-              sf::st_as_sf() %>%
-              dplyr::summarise() %>%
-              sf::st_convex_hull() %>%
-              sf::st_area() %>%
-              as.numeric() %>%
-              sqrt() %>%
-              `/` (6)
-            # for a square MCP, this would give 6 blocks by 6 blocks
-
-            blocks <- safe_cv_spatial(x
-                                      , column = "pa"
-                                      #, r = prep_preds[[1]] # hashed out 2024-09-17
-                                      , k = k_folds
-                                      , size = block_dist
-                                      , iteration = 200
-                                      , selection = "random"
-                                      , extend = 0.5
-                                      , progress = FALSE
-                                      , report = FALSE
-                                      , plot = FALSE
-                                      )
-
-            if(!is.null(blocks$error)) {
-
-              readr::write_lines(paste0("error: "
-                                        , as.character(blocks$error)
-                                        , ". spatial_folds set to FALSE"
-                                        )
-                                 , file = log_file
-                                 , append = TRUE
-                                 )
-
-              spatial_folds <- FALSE
-
-              blocks <- NULL
-
-            } else {
-
-              blocks <- blocks$result$folds_ids %>%
-                tibble::enframe(name = NULL, value = "fold_ids")
+              prep$split_check <- tidysdm::check_splits_balance(prep$split
+                                                                , pa
+                                                                )
 
             }
 
-            if(!is.null(blocks)) {
+            ## folds -------
+            prep$blocks_check <- list(presence_assessment = 0)
 
-              blocks_p <- blocks[spp_pa_env$pa == 1,]
+            counter <- 0
 
-              if(any(c(table(blocks_p$fold_ids) < min_fold_n), length(setdiff(1:k_folds, unique(blocks_p$fold_ids))) > 0)) {
+            block_folds <- k_folds
 
-                how_many_below_thresh <- sum(purrr::map_dbl(1:k_folds, ~ sum(blocks_p$fold_ids == .)) < min_fold_n)
+            while(all(min(prep$blocks_check$presence_assessment) <= min_fold_n, block_folds > 1)) {
 
-                old_k_folds <- k_folds
+              while(all(counter < block_iterations, min(prep$blocks_check$presence_assessment) <= min_fold_n)) {
 
-                k_folds <- old_k_folds - how_many_below_thresh
+                prep$blocks <- spatialsample::spatial_block_cv(data = rsample::testing(prep$split) %>%
+                                                                 sf::st_as_sf(coords = c("x", "y")
+                                                                              , crs = sf::st_crs(prep_preds)
+                                                                              )
+                                                               , v = block_folds
+                                                               )
 
-                blocks_adj <- tibble::tibble(fold_ids = 1:old_k_folds) %>%
-                  dplyr::mutate(n = purrr::map_dbl(fold_ids, ~ sum(blocks_p$fold_ids == .))) %>%
-                  dplyr::mutate(fold_ids_adj = forcats::fct_lump_n(as.factor(fold_ids), k_folds - 1, w = n)) %>%
-                  dplyr::mutate(fold_ids_adj = as.numeric(fold_ids_adj)) %>%
-                  dplyr::distinct()
+                prep$blocks_check <- tidysdm::check_splits_balance(prep$blocks
+                                                                     , pa
+                                                                     )
 
-                blocks <- blocks %>%
-                  dplyr::left_join(blocks_adj) %>%
-                  dplyr::mutate(fold_ids = fold_ids_adj) %>%
-                  dplyr::select(-fold_ids_adj, -n)
+                counter <- counter + 1
 
-                k_folds <- length(unique(blocks$fold_ids))
+              }
 
-                failed_blocks <- max(blocks_adj$fold_ids) - max(blocks_adj$fold_ids_adj)
+              if(min(prep$blocks_check$presence_assessment) <= min_fold_n) {
 
-                if(max(blocks_adj$fold_ids_adj) == 1) {
+                prep$blocks_check <- list(presence_assessment = 0)
 
-                  note <- paste0(failed_blocks
-                                 , " out of "
-                                 , nrow(blocks_adj)
-                                 , " blocks failed to reach "
-                                 , min_fold_n
-                                 , " presences, leaving only 1 block. Reverting to non-spatial cv"
-                                 )
+                block_folds <- block_folds - 1
 
-                  spatial_folds <- FALSE
-
-                } else {
-
-                  note <- paste0(failed_blocks
-                                 , " out of "
-                                 , nrow(blocks_adj)
-                                 , " blocks failed to reach "
-                                 , min_fold_n
-                                 , " presences. These were lumped until every block reached "
-                                 , min_fold_n
-                                 , " presences."
-                                 )
-
-                }
-
-                readr::write_lines(paste0("warning: ", note)
-                                   , file = log_file
-                                   , append = TRUE
-                                   )
+                counter <- 0
 
               }
 
             }
 
-          }
+            if(min(prep$blocks_check$presence_assessment) <= min_fold_n) {
 
-          if(any(!spatial_folds, k_folds == 1)) {
+              prep$spatial_folds <- FALSE
 
-            ## non-spatial -------
+              prep$blocks <- rsample::vfold_cv(data = rsample::testing(prep$split)
+                                               , v = k_folds
+                                               , strata = pa
+                                               )
 
-            blocks <- tibble::tibble(fold_ids = c(sample(1:k_folds_adj
-                                                         , sum(spp_pa_env$pa == 1)
-                                                         , replace = TRUE
-                                                         , prob = rep(1 / k_folds_adj, k_folds_adj)
-                                                         )
-                                                  , sample(1:k_folds_adj
-                                                           , sum(spp_pa_env$pa == 0)
-                                                           , replace = TRUE
-                                                           , prob = rep(1 / k_folds_adj, k_folds_adj)
-                                                           )
-                                                  )
-                                     )
 
-          }
+            }
 
-          prep$blocks <- spp_pa_env %>%
-            dplyr::mutate(block = blocks$fold_ids) %>%
-            dplyr::filter(dplyr::if_any(.cols = names(prep_preds)
-                                        , .fns = \(x) !is.na(x) & !is.infinite(x)
-                                        )
-                          )
-
-          prep$spatial_folds_used <- spatial_folds
-
-          readr::write_lines(paste0("spatial folds = "
-                                    , spatial_folds
-                                    , ". Folds = "
-                                    , length(unique(blocks$fold_ids))
-                                    , ". Folds done in "
-                                    , round(difftime(Sys.time(), start_blocks, units = "mins"), 2)
-                                    , " minutes"
-                                    )
-                             , file = log_file
-                             , append = TRUE
-                             )
-
-          ### block png -------
-          if(save_pngs) {
-
-            block_file <- fs::path(out_dir, "blocks.png")
-
-            title <- paste0(this_taxa
-                            , "\nSpatial folds = "
-                            , prep$spatial_folds_used
-                            , "\nFolds = "
-                            , length(unique(prep$blocks$block))
-                            , "\nPresences = "
-                            , format(nrow(prep$blocks[prep$blocks$pa == 1,]), big.mark = ",")
-                            , "\nBackground = "
-                            , format(nrow(prep$blocks[prep$blocks$pa == 0,]), big.mark = ",")
-                            )
-
-            m <- prep$blocks %>%
-              dplyr::select(x, y, block) %>%
-              sf::st_as_sf(coords = c("x", "y")
-                           , crs = sf::st_crs(prep$bg_points)
-                           ) %>%
-              tmap::tm_shape() +
-                tmap::tm_dots(col = "block"
-                              , size = 0.01
-                              , palette = "viridis"
-                              , breaks = seq(1, max(prep$blocks$block) + 1, 1)
-                              , labels = as.character(seq(1, max(prep$blocks$block), 1))
-                              , alpha = 0.5
-                              ) +
-              tmap::tm_credits(text = title
-                               , position = c("left", "bottom")
+            readr::write_lines(paste0("validation split and blocks completed in: "
+                                      , round(difftime(Sys.time(), start_blocks, units = "mins"), 2)
+                                      , " minutes"
+                                      )
+                               , file = log_file
+                               , append = TRUE
                                )
 
-              tmap::tmap_save(m
-                              , block_file
-                              )
-
           }
 
         }
 
-      }
-
-
-      # reduce env -------
-
-      if(all(reduce_env_thresh, !prep$abandoned)) {
-
-        run <- if(exists("reduce_env", prep)) force_new else TRUE
-
-        if(run) {
-
-          start_reduce_env <- Sys.time()
-
-          prep$reduce_env <- envModel::reduce_env(env_df = prep$blocks
-                                                  , env_cols = names(prep_preds)
-                                                  , y_col = "pa"
-                                                  , thresh = reduce_env_thresh
-                                                  , remove_always = c(pres_x, pres_y, "x", "y", "pa", "block", "cell")
-                                                  )
-
-          readr::write_lines(paste0("reduce_env completed in: "
-                                    , round(difftime(Sys.time(), start_reduce_env, units = "mins"), 2)
+          # end timer ------
+          readr::write_lines(paste0("prep completed. elapsed time: "
+                                    , round(difftime(Sys.time(), start_time, units = "mins"), 2)
                                     , " minutes"
                                     )
                              , file = log_file
                              , append = TRUE
                              )
 
-        }
-
-      } else {
-
-        if(!prep$abandoned) {
-
-          prep$reduce_env$remove <- ""
-          prep$reduce_env$keep <- names(prep_preds)
-          prep$reduce_env$env_cols <- names(prep_preds)
-
-        }
-
       }
 
-        # end timer ------
-        readr::write_lines(paste0("prep completed. elapsed time: "
-                                  , round(difftime(Sys.time(), start_time, units = "mins"), 2)
-                                  , " minutes"
-                                  )
-                           , file = log_file
-                           , append = TRUE
-                           )
+    }
 
-      } else {
+    # save / clean up-------
+    # export before gc()
+    prep$finished <- TRUE
+    prep$log <- if(file.exists(log_file)) readr::read_lines(log_file) else NULL
 
-        prep$abandoned <- TRUE
+    if(delete_out) {
 
-        readr::write_lines(paste0("only "
-                                  , nrow(prep$presence_ras)
-                                  , " useable presence points. SDM abandoned"
-                                  )
-                           , file = log_file
-                           , append = TRUE
-                           )
+      fs::dir_delete(out_dir)
 
-      }
+    } else {
 
-      # save / clean up-------
-      # export before gc()
-      if(exists("subset_file")) fs::file_delete(subset_file)
-      prep$finished <- TRUE
-      prep$log <- if(file.exists(log_file)) readr::read_lines(log_file) else NULL
+      rio::export(prep, prep_file)
 
-      if(delete_out) {
+    }
 
-        fs::dir_delete(out_dir)
+    # clean up -------
+    if(do_gc) {
 
-      } else {
+      stuff <- ls()
 
-        rio::export(prep, prep_file)
+      stuff <- stuff[! stuff %in% c(return_val, "return_val")]
 
-      }
+      rm(list = stuff)
 
-      # clean up -------
-      if(do_gc) {
-
-        stuff <- ls()
-
-        stuff <- stuff[! stuff %in% c(return_val, "return_val")]
-
-        rm(list = stuff)
-
-        gc()
-
-      }
+      gc()
 
     }
 
     res <- if(return_val == "prep") get("prep") else list(prep_file = get("prep_file"))
 
     return(res)
+
+    }
 
   }
 
